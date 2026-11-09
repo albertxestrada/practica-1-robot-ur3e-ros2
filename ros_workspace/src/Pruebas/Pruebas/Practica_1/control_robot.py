@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-
+import csv
 import copy
 import threading
 import time
@@ -8,6 +8,7 @@ from math import pi
 from typing import List
 
 import rclpy
+from rclpy.time import Time
 from control_msgs.action import GripperCommand
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
@@ -36,6 +37,32 @@ ARTICULACIONES = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                   "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
 FACTOR_ESCALA = 0.1  # Velocidad y aceleración máximas (fracción de las máximas del robot)
 
+class Suscriptor(Node):
+
+    def __init__(self):
+        super().__init__("suscriptor_basico")
+        self.create_subscription(JointState, "/joint_states", self.callback_articulaciones, 10)
+
+        self.archivo_csv = open('datos_articulaciones.csv', mode='w', newline='')
+        self.escritor_csv = csv.writer(self.archivo_csv)
+        self.escritor_csv.writerow(['timestamp', 'nombre_articulacion', 'posicion', 'velocidad', 'aceleracion'])
+    
+    def callback_articulaciones(self, mensaje: JointState):
+        t = Time.from_msg(mensaje.header.stamp)
+        segundos, nanosegundos = t.seconds_nanoseconds()
+        timeStamp = segundos + nanosegundos / 1e9
+
+        for i, nombre in enumerate(mensaje.name):
+            posicion = mensaje.position[i] if i < len(mensaje.position) else 0.0
+            velocidad = mensaje.velocity[i] if i < len(mensaje.velocity) else 0.0
+            aceleracion = mensaje.effort[i] if i < len(mensaje.effort) else 0.0 # Nota: 'effort' suele ser par motor/fuerza, no aceleración directa, pero se guarda igual
+            
+            print(f"Tiempo: {timeStamp:.4f}, Articulación: {nombre}, Posición: {posicion:.4f}, Velocidad: {velocidad:.4f}, Aceleración: {aceleracion:.4f}")
+            self.escritor_csv.writerow([timeStamp, nombre, posicion, velocidad, aceleracion])
+    def destroy_node(self):
+            self.get_logger().info("Cerrando CSV")
+            self.archivo_csv.close()
+            super().destroy_node()
 
 class ControlRobot(Node):
     """Control del robot con MoveIt 2 a través de sus acciones y servicios (move_group)."""
@@ -256,9 +283,16 @@ def trayectoria_circular(control: ControlRobot):
 if __name__ == '__main__':
     rclpy.init()
 
+    subscriptor = Suscriptor()
+    # try:
+    #     rclpy.spin(nodo)
+    # except KeyboardInterrupt:
+    #     pass
+
+
     # Crear el objeto de tipo robot
     control = ControlRobot()
-
+    control.ejecutor.add_node(subscriptor)
     pi_medios = pi / 2
     # Mover el robot a articulaciones iniciales
     control.mover_articulaciones([0, -pi_medios, -pi_medios, -pi_medios, pi_medios, 0])
@@ -273,4 +307,5 @@ if __name__ == '__main__':
  
     control.ejecutor.shutdown()
     control.destroy_node()
+    subscriptor.destroy_node()
     rclpy.shutdown()
