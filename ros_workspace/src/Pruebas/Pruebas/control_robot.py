@@ -68,16 +68,22 @@ class ControlRobot(Node):
         self.ejecutor = MultiThreadedExecutor()
         self.ejecutor.add_node(self)
         threading.Thread(target=self.ejecutor.spin, daemon=True).start()
-
+        time.sleep(0.5)  # Dar tiempo al ejecutor para inicializarse antes de esperar servicios
         self.get_logger().info("Esperando a MoveIt (move_group)...")
+        
         self.move_group_client.wait_for_server()
+        self.get_logger().info("move_group_client listo")
         self.execute_client.wait_for_server()
+        self.get_logger().info("execute_client listo")
         self.cartesian_client.wait_for_service()
+        self.get_logger().info("cartesian_client listo")
         self.scene_client.wait_for_service()
+        self.get_logger().info("scene_client listo")
         while not all(j in self.__estado_articulaciones for j in self.articulaciones):
             time.sleep(0.05)
-
+        self.get_logger().info("articulaciones recibidas")
         self.añadir_suelo()
+        self.get_logger().info("suelo añadido")
 
     def __cb_joint_states(self, msg: JointState) -> None:
         for nombre, posicion in zip(msg.name, msg.position):
