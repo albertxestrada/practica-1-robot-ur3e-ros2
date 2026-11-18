@@ -26,6 +26,8 @@ def generar_circulo(self, radio: float = 0.08, puntos: int = 36) -> None:
     p0 = self.pose_actual()
     cx, cy = p0.position.x - radio, p0.position.y
     poses = []
+    publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
+    posicion_home = [0.0, -PI_MEDIOS, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, 0.0]
     for k in range(1, puntos + 1):
         ang = 2 * pi * k / puntos
         p = copy.deepcopy(p0)
@@ -37,7 +39,8 @@ def generar_circulo(self, radio: float = 0.08, puntos: int = 36) -> None:
 def ejecutar_trayectoria_circular(control: ControlRobot) -> None:
     poses = generar_circulo(control, radio=0.08, puntos=36)
     control.mover_trayectoria(poses)
-
+    publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
+    posicion_home = [0.0, -PI_MEDIOS, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, 0.0]
     msg = String()
     msg.data = "joint"
     publicador.publish(msg)

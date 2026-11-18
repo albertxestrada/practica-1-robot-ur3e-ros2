@@ -26,7 +26,9 @@ def ejecutar_trayectoria_lineal(control: ControlRobot) -> None:
     control.mover_trayectoria([copy.deepcopy(pose)])
     pose.position.z += 0.1
     control.mover_trayectoria([copy.deepcopy(pose)])  
-
+    publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
+    posicion_home = [0.0, -PI_MEDIOS, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, 0.0]
+    
     msg = String()
     msg.data = "joint"
     publicador.publish(msg)
