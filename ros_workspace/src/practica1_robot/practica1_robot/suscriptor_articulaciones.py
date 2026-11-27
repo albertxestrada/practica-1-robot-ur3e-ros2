@@ -13,6 +13,8 @@ from std_msgs.msg import String
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from interfaces_practica_1.msg import EstadoArticulaciones
+
 
 UMBRAL_MOVIMIENTO: float = 0.001
 DIRECTORIO_SALIDA: str = "/tmp/datos_trayectorias"
@@ -48,8 +50,6 @@ class SuscriptorArticulaciones(Node):
         posicion = list(mensaje.position)
         velocidad = list(mensaje.velocity)
 
-        publicador = Publicador_articulaciones()
-
         if self._velocidad_previa is not None and self._tiempo_previo is not None:
             dt = tiempo_actual - self._tiempo_previo
             if dt > 0:
@@ -72,8 +72,22 @@ class SuscriptorArticulaciones(Node):
         )
         if self._trayectoria_activa and self._robot_en_movimiento(velocidad):
             self._guardar_fila(tiempo_actual, posicion, velocidad, aceleracion)
-            publicador.generate_message(posicion, velocidad, aceleracion)
+            self._publicar_estado_personalizado(tiempo_actual, posicion, velocidad, aceleracion)
 
+    def _publicar_estado_personalizado(
+        self,
+        tiempo: float,
+        posicion: list[float],
+        velocidad: list[float],
+        aceleracion: list[float],
+    ) -> None:
+        """Empaqueta y publica los datos cinemáticos en el mensaje ROS 2 personalizado."""
+        msg = EstadoArticulaciones()
+        msg.timestamp = float(tiempo)
+        msg.posicion = [float(p) for p in posicion]
+        msg.velocidad = [float(v) for v in velocidad]
+        msg.aceleracion = [float(a) for a in aceleracion]
+        self._publicador_estado.publish(msg)
 
     def _callback_trayectoria(self, mensaje: String) -> None:
         nueva = mensaje.data.strip()
@@ -113,27 +127,11 @@ class SuscriptorArticulaciones(Node):
         """Escribe una fila con los datos cinemáticos actuales en el CSV abierto."""
         if self._escritor_csv:
             self._escritor_csv.writerow(
-                [round(tiempo, 6)] +
-                [round(p, 6) for p in posicion] +
-                [round(v, 6) for v in velocidad] +
-                [round(a, 6) for a in aceleracion]
+                [round(tiempo, 6)]
+                + [round(p, 6) for p in posicion]
+                + [round(v, 6) for v in velocidad]
+                + [round(a, 6) for a in aceleracion]
             )
-
-class Publicador_articulaciones(Node):
-    def __init__(self):
-        super().__init__("publicador_Practica_1")
-        self.publicador = self.create_publisher(String, "primer_topic", 10)
-        self.create_timer(0.1, self.publicar)  # 10 Hz
-        self.message = ""
-    def generate_message(self, posicon,velocidad,aceleracion):
-        self.message = f"Posicion: {posicon:.4f}, Velocidad: {velocidad:.4f}, Aceleracion: {aceleracion:.4f}"
-        print(f" ------------ Mensaje generado: {self.message}")
-        return self.message
-
-    def publicar(self):
-        mensaje = String()
-        mensaje.data = self.message
-        self.publicador.publish(mensaje)
 
 if __name__ == '__main__':
     rclpy.init()
