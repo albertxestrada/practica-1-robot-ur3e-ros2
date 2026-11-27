@@ -1,145 +1,173 @@
 #!/usr/bin/python3
-
 """
-Nodo ROS 2 que suscribe al topic /joint_states del robot UR3e y extrae
-la posición y velocidad de cada articulación. La aceleración se calcula
-numéricamente derivando la velocidad respecto al tiempo entre mensajes.
+Nodo ROS 2 que lee /joint_states del robot UR3e y guarda posición, velocidad
+y aceleración de cada trayectoria en un archivo CSV propio.
+
+La aceleración no viene en el mensaje JointState, así que se calcula derivando
+la velocidad entre dos muestras consecutivas del brazo.
 """
 
 import csv
 import os
-from std_msgs.msg import String
+from typing import Any, List, Optional, TextIO
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from interfaces_practica_1.msg import EstadoArticulaciones
+from std_msgs.msg import String
 
-
-UMBRAL_MOVIMIENTO: float = 0.001
+ARTICULACIONES: List[str] = [
+    "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+    "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
+]
+TOPIC_ARTICULACIONES: str = "/joint_states"
+TOPIC_TRAYECTORIA_ACTIVA: str = "/trayectoria_activa"
 DIRECTORIO_SALIDA: str = "/tmp/datos_trayectorias"
+UMBRAL_MOVIMIENTO: float = 0.001  # rad/s
+TAMANO_COLA: int = 10
+PERIODO_LOG_S: float = 0.5
+DECIMALES: int = 6
+
 
 class SuscriptorArticulaciones(Node):
-    """
-    Nodo suscriptor que lee el estado de las articulaciones del UR3e.
+    """Guarda los datos cinemáticos mientras hay una trayectoria en marcha."""
 
-    Se suscribe a /joint_states y calcula la aceleración por diferencia
-    finita porque el mensaje JointState no la incluye directamente.
-    """
-    def __init__(self):
+    def __init__(self) -> None:
+        """Crea las suscripciones y la carpeta de salida."""
         super().__init__("suscriptor_articulaciones")
-        # Estado previo necesario para calcular la derivada numérica
-        self._velocidad_previa = None
-        self._tiempo_previo = None
+        self._velocidad_previa: Optional[List[float]] = None
+        self._tiempo_previo: Optional[float] = None
         self._trayectoria_activa: str = ""
-        self._archivo_csv = None
-        self._escritor_csv = None
-        self.create_subscription(JointState, "/joint_states", self._callback_joint_states, 10)
-        self.create_subscription(String, "/trayectoria_activa", self._callback_trayectoria, 10)
+        self._archivo_csv: Optional[TextIO] = None
+        self._escritor_csv: Optional[Any] = None
+
         os.makedirs(DIRECTORIO_SALIDA, exist_ok=True)
+        self.create_subscription(
+            JointState, TOPIC_ARTICULACIONES,
+            self._callback_joint_states, TAMANO_COLA)
+        self.create_subscription(
+            String, TOPIC_TRAYECTORIA_ACTIVA,
+            self._callback_trayectoria, TAMANO_COLA)
 
-    
-    def _callback_joint_states(self, mensaje: JointState):
-        """
-        Procesa cada mensaje de /joint_states y registra posición,
-        velocidad y aceleración. En el primer mensaje la aceleración
-        es cero porque todavía no hay estado previo con el que derivar.
-        """
-        # El timestamp llega separado en segundos y nanosegundos; los unimos en un float
-        tiempo_actual = mensaje.header.stamp.sec + mensaje.header.stamp.nanosec * 1e-9
-        posicion = list(mensaje.position)
-        velocidad = list(mensaje.velocity)
+    def _callback_joint_states(self, mensaje: JointState) -> None:
+        """Procesa una muestra del brazo solo si el robot se está moviendo."""
+        # La pinza publica en el mismo topic y sin velocidades: se descarta
+        if not self._es_mensaje_del_brazo(mensaje):
+            return
 
-        if self._velocidad_previa is not None and self._tiempo_previo is not None:
-            dt = tiempo_actual - self._tiempo_previo
-            if dt > 0:
-                # Diferencia finita hacia atrás: a ≈ (v_actual - v_previa) / Δt
-                aceleracion = [(v - vp) / dt for v, vp in zip(velocidad, self._velocidad_previa)]
-            else:
-                # dt=0 ocurre si dos mensajes tienen el mismo timestamp (evitar división por cero)
-                aceleracion = [0.0] * len(velocidad)
-        else:
-            aceleracion = [0.0] * len(velocidad)
+        indices = [mensaje.name.index(nombre) for nombre in ARTICULACIONES]
+        posicion = [mensaje.position[i] for i in indices]
+        velocidad = [mensaje.velocity[i] for i in indices]
+        tiempo = (mensaje.header.stamp.sec
+                  + mensaje.header.stamp.nanosec * 1e-9)
 
-        # Guardamos los valores actuales para usarlos como "previos" en la siguiente llamada
+        velocidad_previa = self._velocidad_previa
+        tiempo_previo = self._tiempo_previo
+        # Se actualiza siempre para que la derivada use la muestra anterior
         self._velocidad_previa = velocidad
-        self._tiempo_previo = tiempo_actual
+        self._tiempo_previo = tiempo
 
+        if not self._trayectoria_activa:
+            return
+        if not self._robot_en_movimiento(velocidad):
+            return
+
+        aceleracion = self._calcular_aceleracion(
+            velocidad, velocidad_previa, tiempo, tiempo_previo)
+        self._guardar_fila(tiempo, posicion, velocidad, aceleracion)
         self.get_logger().info(
-            f"t={tiempo_actual:.3f} | pos={[round(p,3) for p in posicion]} | "
-            f"vel={[round(v,3) for v in velocidad]} | "
-            f"acel={[round(a,3) for a in aceleracion]}"
-        )
-        if self._trayectoria_activa and self._robot_en_movimiento(velocidad):
-            self._guardar_fila(tiempo_actual, posicion, velocidad, aceleracion)
-            self._publicar_estado_personalizado(tiempo_actual, posicion, velocidad, aceleracion)
-
-    def _publicar_estado_personalizado(
-        self,
-        tiempo: float,
-        posicion: list[float],
-        velocidad: list[float],
-        aceleracion: list[float],
-    ) -> None:
-        """Empaqueta y publica los datos cinemáticos en el mensaje ROS 2 personalizado."""
-        msg = EstadoArticulaciones()
-        msg.timestamp = float(tiempo)
-        msg.posicion = [float(p) for p in posicion]
-        msg.velocidad = [float(v) for v in velocidad]
-        msg.aceleracion = [float(a) for a in aceleracion]
-        self._publicador_estado.publish(msg)
+            f"[{self._trayectoria_activa}] t={tiempo:.3f} "
+            f"vel={[round(v, 3) for v in velocidad]}",
+            throttle_duration_sec=PERIODO_LOG_S)
 
     def _callback_trayectoria(self, mensaje: String) -> None:
+        """Abre o cierra el CSV según el nombre de trayectoria recibido."""
         nueva = mensaje.data.strip()
-        if nueva and nueva != self._trayectoria_activa:
+        if nueva == self._trayectoria_activa:
+            return
+        if nueva:
             self._abrir_csv(nueva)
             self.get_logger().info(f"Trayectoria iniciada: {nueva}")
-        elif not nueva and self._trayectoria_activa:
-            self._cerrar_csv()
-            self.get_logger().info(f"Trayectoria finalizada: {self._trayectoria_activa}")
+        else:
+            self.cerrar_csv()
+            self.get_logger().info(
+                f"Trayectoria finalizada: {self._trayectoria_activa}")
         self._trayectoria_activa = nueva
 
-    def _robot_en_movimiento(self, velocidad: list) -> bool:
-        """Devuelve True si alguna articulación supera el umbral mínimo de velocidad."""
+    @staticmethod
+    def _es_mensaje_del_brazo(mensaje: JointState) -> bool:
+        """Indica si el mensaje trae las seis articulaciones con velocidad."""
+        return (len(mensaje.velocity) == len(mensaje.name)
+                and all(n in mensaje.name for n in ARTICULACIONES))
+
+    @staticmethod
+    def _robot_en_movimiento(velocidad: List[float]) -> bool:
+        """Indica si alguna articulación supera el umbral de velocidad."""
         return any(abs(v) > UMBRAL_MOVIMIENTO for v in velocidad)
 
+    @staticmethod
+    def _calcular_aceleracion(
+        velocidad: List[float],
+        velocidad_previa: Optional[List[float]],
+        tiempo: float,
+        tiempo_previo: Optional[float],
+    ) -> List[float]:
+        """Deriva la velocidad por diferencia finita hacia atrás."""
+        sin_datos = [0.0] * len(velocidad)
+        if velocidad_previa is None or tiempo_previo is None:
+            return sin_datos
+        intervalo = tiempo - tiempo_previo
+        if intervalo <= 0:
+            return sin_datos
+        return [(actual - previa) / intervalo
+                for actual, previa in zip(velocidad, velocidad_previa)]
+
     def _abrir_csv(self, nombre_trayectoria: str) -> None:
-        """Crea y abre un archivo CSV nuevo para la trayectoria indicada."""
-        self._cerrar_csv()
+        """Crea el CSV de la trayectoria y escribe su cabecera."""
+        self.cerrar_csv()
         ruta = os.path.join(DIRECTORIO_SALIDA, f"{nombre_trayectoria}.csv")
         self._archivo_csv = open(ruta, "w", newline="")
         self._escritor_csv = csv.writer(self._archivo_csv)
-        self._escritor_csv.writerow([
-            "timestamp",
-            "pos_1", "pos_2", "pos_3", "pos_4", "pos_5", "pos_6",
-            "vel_1", "vel_2", "vel_3", "vel_4", "vel_5", "vel_6",
-            "acel_1", "acel_2", "acel_3", "acel_4", "acel_5", "acel_6"
-        ])
+        cabecera = ["timestamp"]
+        for magnitud in ("pos", "vel", "acel"):
+            cabecera += [f"{magnitud}_{nombre}" for nombre in ARTICULACIONES]
+        self._escritor_csv.writerow(cabecera)
 
-    def _cerrar_csv(self) -> None:
-        """Cierra el archivo CSV si hay uno abierto."""
-        if self._archivo_csv:
+    def _guardar_fila(
+        self,
+        tiempo: float,
+        posicion: List[float],
+        velocidad: List[float],
+        aceleracion: List[float],
+    ) -> None:
+        """Escribe una muestra en el CSV abierto."""
+        if self._escritor_csv is None:
+            return
+        valores = [tiempo, *posicion, *velocidad, *aceleracion]
+        self._escritor_csv.writerow([round(v, DECIMALES) for v in valores])
+
+    def cerrar_csv(self) -> None:
+        """Cierra el CSV si hay uno abierto."""
+        if self._archivo_csv is not None:
             self._archivo_csv.close()
             self._archivo_csv = None
             self._escritor_csv = None
 
-    def _guardar_fila(self, tiempo: float, posicion: list, velocidad: list, aceleracion: list) -> None:
-        """Escribe una fila con los datos cinemáticos actuales en el CSV abierto."""
-        if self._escritor_csv:
-            self._escritor_csv.writerow(
-                [round(tiempo, 6)]
-                + [round(p, 6) for p in posicion]
-                + [round(v, 6) for v in velocidad]
-                + [round(a, 6) for a in aceleracion]
-            )
 
-if __name__ == '__main__':
-    rclpy.init()
+def main(args: Optional[List[str]] = None) -> None:
+    """Arranca el nodo y cierra el CSV al terminar."""
+    rclpy.init(args=args)
     nodo = SuscriptorArticulaciones()
     try:
         rclpy.spin(nodo)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
-    nodo._cerrar_csv()
-    nodo.destroy_node()
-    rclpy.try_shutdown()
+    finally:
+        nodo.cerrar_csv()
+        nodo.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()
