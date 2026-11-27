@@ -21,17 +21,20 @@ PI_MEDIOS: float = pi / 2
 TOPIC_TRAYECTORIA_ACTIVA: str = "/trayectoria_activa"
 
 def ejecutar_trayectoria_lineal(control: ControlRobot) -> None:
+    publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
+    msg = String()
+    msg.data = "lineal"
+    publicador.publish(msg)
+
     pose = control.pose_actual()
     pose.position.z -= 0.1
     control.mover_trayectoria([copy.deepcopy(pose)])
     pose.position.z += 0.1
     control.mover_trayectoria([copy.deepcopy(pose)])  
-    publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
+   
     posicion_home = [0.0, -PI_MEDIOS, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, 0.0]
     
-    msg = String()
-    msg.data = "joint"
-    publicador.publish(msg)
+
     control.mover_articulaciones(posicion_home)
 
     # Señalizar fin de trayectoria con cadena vacía para que el suscriptor cierre el CSV

@@ -22,8 +22,8 @@ PI_MEDIOS: float = pi / 2
 # Topic compartido con el suscriptor para sincronizar el guardado
 TOPIC_TRAYECTORIA_ACTIVA: str = "/trayectoria_activa"
 
-def generar_circulo(self, radio: float = 0.08, puntos: int = 36) -> None:
-    p0 = self.pose_actual()
+def generar_circulo(control: ControlRobot, radio: float = 0.08, puntos: int = 36) -> list:
+    p0 = control.pose_actual()
     cx, cy = p0.position.x - radio, p0.position.y
     poses = []
     publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
@@ -42,7 +42,7 @@ def ejecutar_trayectoria_circular(control: ControlRobot) -> None:
     publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
     posicion_home = [0.0, -PI_MEDIOS, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, 0.0]
     msg = String()
-    msg.data = "joint"
+    msg.data = "circular"
     publicador.publish(msg)
     control.mover_articulaciones(posicion_home)
 
