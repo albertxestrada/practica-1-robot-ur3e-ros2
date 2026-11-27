@@ -69,12 +69,3 @@ La lógica de movimiento no cambia.
 | Filas sin aceleración | La pinza publica en `/joint_states` sin velocidades | El suscriptor descarta esos mensajes |
 | El suscriptor no arrancaba tras añadir el mensaje | Nombre de paquete incorrecto en el `import` y publicador sin crear | Corregidos el `import` y la creación del publicador |
 
-## Pendiente antes de la entrega
-
-- [ ] Probar desde cero las tres trayectorias y comprobar `joint.csv`, `lineal.csv` y `circular.csv`.
-- [ ] Comprobar el mensaje en `/estado_cinematico`.
-- [ ] Lineal: esperar a que el suscriptor esté conectado antes de publicar el aviso.
-- [ ] Circular: evitar que el círculo se recorra una vez antes de empezar a grabar.
-- [ ] Declarar `interfaces_practica_1` como dependencia en el `package.xml` de `practica1_robot`.
-- [ ] Calidad de código en Lineal y Circular: clases, docstrings, tipos, constantes y nombres de archivo en minúsculas.
-- [ ] Eliminar la carpeta duplicada `ros_workspace/src/Pruebas`, conservando `pruebas`.
