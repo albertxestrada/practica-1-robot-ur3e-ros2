@@ -24,7 +24,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'suscriptor_articulaciones = practica1_robot.suscriptor_articulaciones:main'
+            'suscriptor_articulaciones = '
+            'practica1_robot.suscriptor_articulaciones:main',
+            'trayectoria_joint = practica1_robot.trayectoria_joint:main',
         ],
     },
 )

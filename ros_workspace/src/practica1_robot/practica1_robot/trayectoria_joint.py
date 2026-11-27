@@ -1,57 +1,106 @@
 #!/usr/bin/python3
 """
-Ejecuta una trayectoria en espacio de articulaciones (Joint Space) sobre el robot UR3e.
+Trayectoria en espacio de articulaciones (Joint Space) para el robot UR3e.
 
-Se mueve el robot a través de tres configuraciones distintas y se regresa
-a la posición de partida. Los ángulos están expresados en radianes.
-Se apoya en la clase ControlRobot proporcionada.
+Avisa al suscriptor por /trayectoria_activa antes y después del movimiento
+para que guarde los datos en joint.csv. Los ángulos están en radianes.
 """
 
 import sys
-sys.path.insert(0, '/home/laboratorio/ros_workspace/src/pruebas/pruebas')
+import time
 from math import pi
-from control_robot import ControlRobot
+from typing import List, Optional, Tuple
+
 import rclpy
 from std_msgs.msg import String
 
-# Ángulo de 90° en radianes, referencia para las articulaciones del UR3e
-PI_MEDIOS: float = pi / 2
-# Topic compartido con el suscriptor para sincronizar el guardado
+# El paquete "pruebas" no es instalable, se importa desde su carpeta
+sys.path.insert(0, "/home/laboratorio/ros_workspace/src/pruebas/pruebas")
+from control_robot import ControlRobot  # noqa: E402
+
+NOMBRE_TRAYECTORIA: str = "joint"
 TOPIC_TRAYECTORIA_ACTIVA: str = "/trayectoria_activa"
+TAMANO_COLA: int = 10
+ESPERA_MAXIMA_SUSCRIPTOR_S: float = 10.0
+PERIODO_COMPROBACION_S: float = 0.1
+PAUSA_SENAL_S: float = 0.5
 
-def ejecutar_trayectoria_joint(control: ControlRobot) -> None:
-    """
-    Mueve el robot a través de tres configuraciones articulares y regresa
-    al punto de partida. Todos los ángulos están en radianes.
-    """
-    publicador = control.create_publisher(String, TOPIC_TRAYECTORIA_ACTIVA, 10)
+ANGULO_RECTO: float = pi / 2
+MEDIO_ANGULO_RECTO: float = pi / 4
 
-    posicion_home = [0.0, -PI_MEDIOS, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, 0.0]
+POSICION_HOME: Tuple[float, ...] = (
+    0.0, -ANGULO_RECTO, -ANGULO_RECTO,
+    -ANGULO_RECTO, ANGULO_RECTO, 0.0)
+CONFIGURACION_IZQUIERDA: Tuple[float, ...] = (
+    MEDIO_ANGULO_RECTO, -MEDIO_ANGULO_RECTO, -ANGULO_RECTO,
+    -ANGULO_RECTO, ANGULO_RECTO, MEDIO_ANGULO_RECTO)
+CONFIGURACION_DERECHA: Tuple[float, ...] = (
+    -MEDIO_ANGULO_RECTO, -MEDIO_ANGULO_RECTO, -ANGULO_RECTO,
+    -ANGULO_RECTO, ANGULO_RECTO, -MEDIO_ANGULO_RECTO)
+RECORRIDO: Tuple[Tuple[float, ...], ...] = (
+    CONFIGURACION_IZQUIERDA, CONFIGURACION_DERECHA, POSICION_HOME)
 
-    # Rotamos la base y el hombro para desplazar el brazo lateralmente
-    configuracion_1 = [pi/4, -PI_MEDIOS/2, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, pi/4]
 
-    # Misma postura pero en sentido contrario (movimiento simétrico)
-    configuracion_2 = [-pi/4, -PI_MEDIOS/2, -PI_MEDIOS, -PI_MEDIOS, PI_MEDIOS, -pi/4]
+class TrayectoriaJoint:
+    """Ejecuta el recorrido articular y señaliza su inicio y su fin."""
 
-    # Avisar al suscriptor que empieza la trayectoria para que inicie el guardado en CSV    
+    def __init__(self, control: ControlRobot) -> None:
+        """Prepara el publicador sobre el nodo de control del robot."""
+        self._control = control
+        self._publicador = control.create_publisher(
+            String, TOPIC_TRAYECTORIA_ACTIVA, TAMANO_COLA)
 
-    msg = String()
-    msg.data = "joint"
-    publicador.publish(msg)
-    control.mover_articulaciones(posicion_home)
+    def ejecutar(self) -> bool:
+        """Devuelve True si el recorrido completo se ejecutó sin fallos."""
+        # Ir a home antes de grabar asegura el mismo punto de partida
+        if not self._mover(POSICION_HOME):
+            return False
+        if not self._esperar_suscriptor():
+            return False
 
-    # Señalizar fin de trayectoria con cadena vacía para que el suscriptor cierre el CSV
-    msg.data = ""
-    publicador.publish(msg)
+        self._senalizar(NOMBRE_TRAYECTORIA)
+        try:
+            return all(self._mover(objetivo) for objetivo in RECORRIDO)
+        finally:
+            self._senalizar("")
 
-if __name__ == '__main__':
-    import time
-    rclpy.init()
+    def _mover(self, objetivo: Tuple[float, ...]) -> bool:
+        """Mueve el robot a una configuración e informa si falla."""
+        correcto = self._control.mover_articulaciones(list(objetivo))
+        if not correcto:
+            self._control.get_logger().error(
+                f"No se pudo alcanzar la configuración {objetivo}")
+        return correcto
+
+    def _esperar_suscriptor(self) -> bool:
+        """Espera a que el suscriptor esté conectado para no perder avisos."""
+        limite = time.monotonic() + ESPERA_MAXIMA_SUSCRIPTOR_S
+        while self._publicador.get_subscription_count() == 0:
+            if time.monotonic() > limite:
+                self._control.get_logger().error(
+                    "No hay suscriptor: arranca suscriptor_articulaciones")
+                return False
+            time.sleep(PERIODO_COMPROBACION_S)
+        return True
+
+    def _senalizar(self, nombre: str) -> None:
+        """Publica el nombre activo; una cadena vacía indica el final."""
+        self._publicador.publish(String(data=nombre))
+        # Margen para que el suscriptor abra o cierre el CSV
+        time.sleep(PAUSA_SENAL_S)
+
+
+def main(args: Optional[List[str]] = None) -> None:
+    """Conecta con el robot y ejecuta la trayectoria."""
+    rclpy.init(args=args)
     control = ControlRobot()
     try:
-        ejecutar_trayectoria_joint(control)
+        TrayectoriaJoint(control).ejecutar()
     finally:
         control.ejecutor.shutdown()
         control.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()
