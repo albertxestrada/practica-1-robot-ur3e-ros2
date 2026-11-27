@@ -16,7 +16,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
-
+from interfaces_practica1_robot.msg import EstadoArticulaciones
 ARTICULACIONES: List[str] = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
@@ -76,10 +76,26 @@ class SuscriptorArticulaciones(Node):
         aceleracion = self._calcular_aceleracion(
             velocidad, velocidad_previa, tiempo, tiempo_previo)
         self._guardar_fila(tiempo, posicion, velocidad, aceleracion)
+        self._publicar_estado_personalizado(tiempo, posicion, velocidad, aceleracion)
         self.get_logger().info(
             f"[{self._trayectoria_activa}] t={tiempo:.3f} "
             f"vel={[round(v, 3) for v in velocidad]}",
             throttle_duration_sec=PERIODO_LOG_S)
+
+    def _publicar_estado_personalizado(
+        self,
+        tiempo: float,
+        posicion: list[float],
+        velocidad: list[float],
+        aceleracion: list[float],
+    ) -> None:
+        """Empaqueta y publica los datos cinemáticos en el mensaje ROS 2 personalizado."""
+        msg = EstadoArticulaciones()
+        msg.timestamp = float(tiempo)
+        msg.posicion = [float(p) for p in posicion]
+        msg.velocidad = [float(v) for v in velocidad]
+        msg.aceleracion = [float(a) for a in aceleracion]
+        self._publicador_estado.publish(msg)
 
     def _callback_trayectoria(self, mensaje: String) -> None:
         """Abre o cierra el CSV según el nombre de trayectoria recibido."""
