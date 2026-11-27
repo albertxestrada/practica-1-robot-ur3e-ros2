@@ -16,7 +16,8 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
-from interfaces_practica1_robot.msg import EstadoArticulaciones
+from interfaces_practica_1.msg import EstadoArticulaciones
+
 ARTICULACIONES: List[str] = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
@@ -49,6 +50,10 @@ class SuscriptorArticulaciones(Node):
         self.create_subscription(
             String, TOPIC_TRAYECTORIA_ACTIVA,
             self._callback_trayectoria, TAMANO_COLA)
+        self._publicador_estado = self.create_publisher(
+            EstadoArticulaciones, "/estado_cinematico", 10
+            )
+        os.makedirs(DIRECTORIO_SALIDA, exist_ok=True)
 
     def _callback_joint_states(self, mensaje: JointState) -> None:
         """Procesa una muestra del brazo solo si el robot se está moviendo."""
