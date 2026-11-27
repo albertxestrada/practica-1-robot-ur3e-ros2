@@ -48,6 +48,8 @@ class SuscriptorArticulaciones(Node):
         posicion = list(mensaje.position)
         velocidad = list(mensaje.velocity)
 
+        publicador = Publicador_articulaciones()
+
         if self._velocidad_previa is not None and self._tiempo_previo is not None:
             dt = tiempo_actual - self._tiempo_previo
             if dt > 0:
@@ -70,6 +72,8 @@ class SuscriptorArticulaciones(Node):
         )
         if self._trayectoria_activa and self._robot_en_movimiento(velocidad):
             self._guardar_fila(tiempo_actual, posicion, velocidad, aceleracion)
+            publicador.generate_message(posicion, velocidad, aceleracion)
+
 
     def _callback_trayectoria(self, mensaje: String) -> None:
         nueva = mensaje.data.strip()
@@ -114,6 +118,22 @@ class SuscriptorArticulaciones(Node):
                 [round(v, 6) for v in velocidad] +
                 [round(a, 6) for a in aceleracion]
             )
+
+class Publicador_articulaciones(Node):
+    def __init__(self):
+        super().__init__("publicador_Practica_1")
+        self.publicador = self.create_publisher(String, "primer_topic", 10)
+        self.create_timer(0.1, self.publicar)  # 10 Hz
+        self.message = ""
+    def generate_message(self, posicon,velocidad,aceleracion):
+        self.message = f"Posicion: {posicon:.4f}, Velocidad: {velocidad:.4f}, Aceleracion: {aceleracion:.4f}"
+        print(f" ------------ Mensaje generado: {self.message}")
+        return self.message
+
+    def publicar(self):
+        mensaje = String()
+        mensaje.data = self.message
+        self.publicador.publish(mensaje)
 
 if __name__ == '__main__':
     rclpy.init()
